@@ -1,0 +1,27 @@
+# github.com/BurntSushi/xgb v0.0.0-20210121224620-deaf085860bc
+## explicit
+github.com/BurntSushi/xgb
+github.com/BurntSushi/xgb/xproto
+# github.com/hybridgroup/mjpeg v0.0.0-20140228234708-4680f319790e
+## explicit
+github.com/hybridgroup/mjpeg
+# github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646
+## explicit
+github.com/nfnt/resize
+# github.com/otiai10/gosseract v2.2.1+incompatible
+## explicit
+# github.com/rs/zerolog v1.25.0
+## explicit
+github.com/rs/zerolog
+github.com/rs/zerolog/internal/cbor
+github.com/rs/zerolog/internal/json
+github.com/rs/zerolog/log
+# github.com/vova616/screenshot v0.0.0-20191005130345-da36db2560ab
+## explicit
+github.com/vova616/screenshot
+# gocv.io/x/gocv v0.28.0
+## explicit
+gocv.io/x/gocv
+# golang.org/x/net v0.0.0-20211216030914-fe4d6282115f
+## explicit
+golang.org/x/net/websocket
