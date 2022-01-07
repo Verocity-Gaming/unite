@@ -163,7 +163,7 @@ func init() {
 	}
 }
 
-func capture(category string) error {
+func capture() error {
 	img, err := screenshot.CaptureScreen()
 	if err != nil {
 		return err
@@ -185,9 +185,11 @@ func capture(category string) error {
 		return nil
 	}
 
-	m := matched(matrix, category)
-	for _, match := range m {
-		go match.process(matrix.Clone(), img)
+	for _, category := range []string{scored, game} {
+		m := matched(matrix, category)
+		for _, match := range m {
+			go match.process(matrix.Clone(), img)
+		}
 	}
 
 	return nil
@@ -350,11 +352,9 @@ func main() {
 	socket = pipe.New(addr)
 
 	for {
-		for _, category := range []string{scored, game} {
-			err := capture(category)
-			if err != nil {
-				kill(err)
-			}
+		err := capture()
+		if err != nil {
+			kill(err)
 		}
 
 		time.Sleep(delay)
