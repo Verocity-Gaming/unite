@@ -8,6 +8,7 @@ Pokemon Unite scoreboard HUD and extra tools running over captured game feeds us
 git clone https://github.com/Verocity-Gaming/unite.git
 cd unite-main
 go build && unitehud.exe
+```
 
 ### Client (OBS Live)
 
