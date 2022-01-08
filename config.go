@@ -1,6 +1,11 @@
 package main
 
 import (
+	"fmt"
+
+	"github.com/rs/zerolog/log"
+	"gocv.io/x/gocv"
+
 	"github.com/verocity-gaming/unitehud/team"
 )
 
@@ -22,15 +27,18 @@ var (
 			},
 			team.Orange.Name: {
 				filter{team.Orange, "img/orange/score/score.png", -0},
+				filter{team.Orange, "img/orange/score/score_alt.png", -0},
 			},
 			team.Self.Name: {
-				filter{team.Self, "img/self/score/score.png", -0},
+				//filter{team.Self, "img/self/score/score.png", -0},
 				filter{team.Self, "img/self/score/score_alt.png", -0},
-				filter{team.Self, "img/self/score/score_alt_alt.png", -0},
-				filter{team.Self, "img/self/score/score_alt_alt_alt.png", -0},
-				filter{team.Self, "img/self/score/score_alt_alt_alt_alt.png", -0},
-				filter{team.Self, "img/self/score/score_alt_alt.png", -0},
-				filter{team.Self, "img/self/score/score_big_alt.png", -0},
+				/*
+					filter{team.Self, "img/self/score/score_alt_alt.png", -0},
+					filter{team.Self, "img/self/score/score_alt_alt_alt.png", -0},
+					filter{team.Self, "img/self/score/score_alt_alt_alt_alt.png", -0},
+					filter{team.Self, "img/self/score/score_alt_alt.png", -0},
+					filter{team.Self, "img/self/score/score_big_alt.png", -0},
+				*/
 			},
 		},
 		points: {
@@ -147,9 +155,13 @@ var (
 				filter{team.Self, "img/self/points/point_0_alt_alt_alt.png", 0},
 				filter{team.Self, "img/self/points/point_1.png", 1},
 				filter{team.Self, "img/self/points/point_1_alt.png", 1},
+				filter{team.Self, "img/self/points/point_2.png", 2},
+				filter{team.Self, "img/self/points/point_2_alt.png", 2},
 				filter{team.Self, "img/self/points/point_5.png", 5},
 				filter{team.Self, "img/self/points/point_5_alt.png", 5},
 				filter{team.Self, "img/self/points/point_5_alt_alt.png", 5},
+				filter{team.Self, "img/self/points/point_5_alt_alt_alt.png", 5},
+				filter{team.Self, "img/self/points/point_5_alt_alt_alt_alt.png", 5},
 				filter{team.Self, "img/self/points/point_7.png", 7},
 				filter{team.Self, "img/self/points/point_7_alt.png", 7},
 				filter{team.Self, "img/self/points/point_7_alt_alt.png", 7},
@@ -174,3 +186,33 @@ var (
 		},
 	}
 )
+
+func load() {
+	for category := range filenames {
+		for subcategory, filters := range filenames[category] {
+			for _, filter := range filters {
+				templates[category][filter.Team.Name] = append(templates[category][filter.Team.Name],
+					template{
+						filter,
+						gocv.IMRead(filter.file, gocv.IMReadColor),
+						1,
+						category,
+						subcategory,
+					},
+				)
+			}
+		}
+	}
+
+	for category := range templates {
+		for _, templates := range templates[category] {
+			for _, t := range templates {
+				if t.Empty() {
+					kill(fmt.Errorf("invalid scored template: %s (scale: %.2f)", t.file, t.scalar))
+				}
+
+				log.Debug().Object("template", t).Msg("score template loaded")
+			}
+		}
+	}
+}

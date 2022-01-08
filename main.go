@@ -1,26 +1,21 @@
 package main
 
 import (
-	"errors"
 	"flag"
-	"fmt"
 	"image"
-	"image/color"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/hybridgroup/mjpeg"
-	"github.com/nfnt/resize"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/vova616/screenshot"
 	"gocv.io/x/gocv"
 
 	"github.com/verocity-gaming/unitehud/dev"
-	"github.com/verocity-gaming/unitehud/duplicate"
 	"github.com/verocity-gaming/unitehud/pipe"
 	"github.com/verocity-gaming/unitehud/team"
 )
@@ -28,20 +23,8 @@ import (
 // windows
 // cls && go build && unitehud.exe -server -optimal
 
-/*
-	pieces={
-		"0":{"file":"img/purple/points/point_1.png","point":"(45,10)","value":1},
-		"1":{"file":"img/purple/points/point_0_alt.png","point":"(67,14)","value":0},
-		"pieces":2
-	}
-		removed={
-			"0":{"file":"img/purple/points/point_0_alt.png","point":"(67,14)","value":0},
-			"pieces":1
-	}
-*/
-
 type filter struct {
-	team.Team
+	*team.Team
 	file  string
 	value int
 }
@@ -54,13 +37,6 @@ type template struct {
 	subcategory string
 }
 
-type match struct {
-	image.Point
-	template
-}
-
-var last *duplicate.Duplicate
-
 // Categories
 const (
 	game    = "game"
@@ -72,45 +48,43 @@ const (
 
 // Coadjutants.
 var (
-	stream *mjpeg.Stream
-	window *gocv.Window
 	socket *pipe.Pipe
-
-	mask    = gocv.NewMat()
-	nomatch = match{}
-
-	red   = color.RGBA{255, 0, 0, 255}
-	green = color.RGBA{0, 255, 0, 255}
-	blue  = color.RGBA{0, 0, 255, 255}
-
-	errWindowClosed = errors.New("window closed")
-)
-
-// Controllers.
-var (
-	sigq = make(chan os.Signal, 1)
-)
-
-// Consolidation.
-var (
-	skipped = 0
+	mask   = gocv.NewMat()
+	rect   = image.Rect(640, 0, 1280, 500)
+	sigq   = make(chan os.Signal, 1)
 )
 
 // Options.
 var (
-	cpu        = false
 	record     = false
-	delay      = time.Second / 2
-	method     = gocv.TmCcoeffNormed
 	acceptance = float32(0.91)
 	//acceptance = float32(0.95)
 	addr = ":17069"
 )
 
+var workers = map[string]int{
+	team.None.Name:   1,
+	team.Self.Name:   4,
+	team.Purple.Name: 1,
+	team.Orange.Name: 1,
+}
+
+var distribq = map[string]chan *image.RGBA{
+	team.None.Name:   make(chan *image.RGBA),
+	team.Self.Name:   make(chan *image.RGBA),
+	team.Purple.Name: make(chan *image.RGBA),
+	team.Orange.Name: make(chan *image.RGBA),
+}
+
+var imgq = map[string]chan *image.RGBA{
+	team.None.Name:   make(chan *image.RGBA),
+	team.Self.Name:   make(chan *image.RGBA),
+	team.Purple.Name: make(chan *image.RGBA),
+	team.Orange.Name: make(chan *image.RGBA),
+}
+
 func init() {
 	flag.BoolVar(&record, "record", record, "record data such as images and logs for developer-specific debugging")
-	flag.BoolVar(&cpu, "cpu", cpu, "decrease cpu load by optimizing image processing, with a potential impact on output")
-	flag.DurationVar(&delay, "delay", delay, "interval to wait between capturing screen coordinates")
 	flag.StringVar(&addr, "addr", addr, "http/websocket serve address")
 	avg := flag.Float64("match", float64(acceptance)*100, `0-100% certainty when processing score values`)
 	level := flag.String("v", zerolog.LevelDebugValue, "log level (panic, fatal, error, warn, info, debug)")
@@ -131,193 +105,72 @@ func init() {
 	if err != nil {
 		log.Fatal().Err(err).Send()
 	}
-
 	log.Logger = log.Logger.Level(lvl)
 
-	for category := range filenames {
-		for subcategory, filters := range filenames[category] {
-			for _, filter := range filters {
-				templates[category][filter.Team.Name] = append(templates[category][filter.Team.Name],
-					template{
-						filter,
-						gocv.IMRead(filter.file, gocv.IMReadColor),
-						1,
-						category,
-						subcategory,
-					},
-				)
-			}
-		}
-	}
+	load()
+}
 
-	for category := range templates {
-		for _, templates := range templates[category] {
-			for _, t := range templates {
-				if t.Empty() {
-					kill(fmt.Errorf("invalid scored template: %s (scale: %.2f)", t.file, t.scalar))
-				}
-
-				log.Debug().Object("template", t).Msg("score template loaded")
-			}
+func capture(name string) {
+	for {
+		img, err := screenshot.CaptureRect(rect)
+		if err != nil {
+			kill(err)
 		}
+
+		select {
+		case imgq[name] <- img:
+		default:
+		}
+
+		time.Sleep(team.Delay(name))
 	}
 }
 
-func capture() error {
-	img, err := screenshot.CaptureScreen()
-	if err != nil {
-		return err
-	}
+func loop(t []template, imgq chan *image.RGBA) {
+	runtime.LockOSThread()
 
-	if cpu {
-		// Cut the image in half.
-		img.Rect.Max.Y /= 2
-	}
-
-	matrix, err := gocv.ImageToMatRGB(img)
-	if err != nil {
-		return err
-	}
-
-	if matrix.Empty() {
-		skipped++
-		log.Warn().Int("skipped", skipped).Msg("skipped frame")
-		return nil
-	}
-
-	for _, category := range []string{scored, game} {
-		m := matched(matrix, category)
-		for _, match := range m {
-			go match.process(matrix.Clone(), img)
+	for img := range imgq {
+		matrix, err := gocv.ImageToMatRGB(img)
+		if err != nil {
+			kill(err)
 		}
-	}
 
-	return nil
-}
+		matches(matrix, img, t)
 
-func (match match) process(matrix gocv.Mat, img *image.RGBA) {
-	log.Info().Object("match", match).Int("cols", matrix.Cols()).Int("rows", matrix.Rows()).Msg("match found")
-
-	switch match.category {
-	case scored:
-		go match.points(matrix.Region(match.Team.Rectangle(match.Point)), img)
-	case game:
-		switch match.subcategory {
-		case gameVS:
-			socket.Clear()
-
-			if record {
-				dev.Start()
-			}
-		case gameEnd:
-			if record {
-				dev.End()
-			}
-		}
+		matrix.Close()
 	}
 }
 
-func matched(matrix gocv.Mat, category string) []match {
-	results := map[string][]gocv.Mat{}
-	var matched []match
+func matches(matrix gocv.Mat, img *image.RGBA, t []template) {
+	results := make([]gocv.Mat, len(t))
 
-	for name, t := range templates[category] {
-		results[name] = make([]gocv.Mat, len(templates[category][name]))
+	for i, template := range t {
+		results[i] = gocv.NewMat()
+		defer results[i].Close()
 
-		for i, st := range t {
-			mat := gocv.NewMat()
-			defer mat.Close()
-
-			gocv.MatchTemplate(matrix, st.Mat, &mat, method, mask)
-
-			results[st.Team.Name][i] = mat
-		}
+		gocv.MatchTemplate(matrix, template.Mat, &results[i], gocv.TmCcoeffNormed, mask)
 	}
 
-	// Iterate over resulting matches.
-	for team, mats := range results {
-		for i := range mats {
-			if mats[i].Empty() {
-				log.Warn().Str("filename", filenames[category][team][i].file).Msg("empty result")
-				continue
-			}
-
-			_, maxc, _, maxp := gocv.MinMaxLoc(mats[i])
-			if maxc >= acceptance {
-				matched = append(matched, match{
-					Point:    maxp,
-					template: templates[category][team][i],
-				})
-			}
-		}
-	}
-
-	return matched
-}
-
-func (m *match) points(matrix2 gocv.Mat, img *image.RGBA) {
-	results := make([]gocv.Mat, len(templates[points][m.Team.Name]))
-
-	for i, pt := range templates[points][m.Team.Name] {
-		mat := gocv.NewMat()
-		defer mat.Close()
-
-		results[i] = mat
-
-		gocv.MatchTemplate(matrix2, pt.Mat, &mat, method, mask)
-	}
-
-	pieces := pieces([]piece{})
-
-	for i := range results {
-		if results[i].Empty() {
-			log.Warn().Str("filename", m.file).Msg("empty result")
+	for i, mat := range results {
+		if mat.Empty() {
+			log.Warn().Str("filename", t[i].file).Msg("empty result")
 			continue
 		}
 
-		_, maxc, _, maxp := gocv.MinMaxLoc(results[i])
+		_, maxc, _, maxp := gocv.MinMaxLoc(mat)
 		if maxc >= acceptance {
-			pieces = append(pieces,
-				piece{
-					maxp,
-					templates[points][m.Team.Name][i].filter,
-				},
-			)
+			match{
+				Point:    maxp,
+				template: t[i],
+			}.process(matrix, img)
 		}
-	}
-
-	value, order := pieces.Int()
-
-	latest := duplicate.New(value, m.Team, matrix2)
-
-	if value == 0 {
-		log.Warn().Object("team", m.Team).Str("order", order).Msg("no value extracted")
-	}
-
-	dup := last.Is(latest)
-	if dup {
-		log.Warn().Object("latest", latest).Object("last", last).Msg("duplicate match")
-	}
-
-	last = latest
-
-	if record {
-		dev.Capture(img, matrix2, latest.Team.Name, order, dup, latest.Value)
-		dev.Log(fmt.Sprintf("%s %d (duplicate: %t)", latest.Name, latest.Value, dup))
-	}
-
-	if !dup {
-		go socket.Publish(latest.Team, latest.Value)
 	}
 }
 
 func kill(errs ...error) {
 	for _, err := range errs {
-		if err == errWindowClosed {
-			continue
-		}
-
 		log.Error().Err(err).Send()
+		time.Sleep(time.Millisecond)
 	}
 
 	sigq <- os.Kill
@@ -327,18 +180,14 @@ func signals() {
 	signal.Notify(sigq, syscall.SIGINT, syscall.SIGTERM)
 	s := <-sigq
 
-	if s == os.Interrupt && window != nil {
-		defer window.Close()
-	}
-
 	log.Info().Stringer("signal", s).Msg("closing...")
+
 	os.Exit(1)
 }
 
 func main() {
 	log.Info().
 		Bool("record", record).
-		Bool("cpu", cpu).
 		Str("match", strconv.Itoa(int(acceptance*100))+"%").
 		Str("addr", addr).Msg("unitehud")
 
@@ -351,37 +200,18 @@ func main() {
 
 	socket = pipe.New(addr)
 
-	for {
-		err := capture()
-		if err != nil {
-			kill(err)
+	for category := range templates {
+		if category == points {
+			continue
 		}
 
-		time.Sleep(delay)
-	}
-}
-
-func (t template) scaled(scalar float64) template {
-	img, err := t.ToImage()
-	if err != nil {
-		kill(err)
+		for name := range templates[category] {
+			for i := 0; i < workers[name]; i++ {
+				go capture(name)
+				go loop(templates[category][name], imgq[name])
+			}
+		}
 	}
 
-	r := resize.Resize(uint(float64(t.Cols())*scalar), uint(float64(t.Rows())*scalar), img, resize.Lanczos3)
-
-	m, err := gocv.ImageToMatRGB(r)
-	if err != nil {
-		kill(err)
-	}
-
-	return template{t.filter, m, scalar, t.category, t.subcategory}
-}
-
-func square(p image.Point, length, width int) image.Rectangle {
-	return image.Rect(
-		p.X,
-		p.Y,
-		p.X+length,
-		p.Y+width,
-	)
+	signals()
 }

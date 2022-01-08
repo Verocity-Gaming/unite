@@ -49,8 +49,9 @@ func save(m gocv.Mat) {
 }
 
 func main() {
-	d1 := duplicate.New(0, team.Self, matrix("50_2.png"))
-	d2 := duplicate.New(0, team.Self, matrix("50_1.png"))
-	save(d1.Region())
-	println(d1.Is(d2))
+
+	d1 := duplicate.New(0, matrix("50_2.png"), team.Self.Region(matrix("50_2.png")))
+	d2 := duplicate.New(0, matrix("50_2.png"), team.Self.Region(matrix("50_2.png")))
+	// save(d1.Region())
+	println(d1.Of(d2))
 }

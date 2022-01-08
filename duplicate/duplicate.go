@@ -1,45 +1,49 @@
 package duplicate
 
 import (
-	"image"
 	"time"
 
 	"gocv.io/x/gocv"
 
 	"github.com/rs/zerolog"
-	"github.com/verocity-gaming/unitehud/team"
+	"github.com/rs/zerolog/log"
 )
 
 type Duplicate struct {
 	Value int
-	team.Team
 	time.Time
 	gocv.Mat
+	region gocv.Mat
 }
 
-func New(value int, team team.Team, mat gocv.Mat) *Duplicate {
+func New(value int, mat, region gocv.Mat) *Duplicate {
 	return &Duplicate{
 		value,
-		team,
 		time.Now(),
-		mat,
+		mat.Clone(),
+		region,
 	}
 }
 
-func (d *Duplicate) Is(d2 *Duplicate) bool {
+func (d *Duplicate) Close() {
+	err := d.Mat.Close()
+	if err != nil {
+		log.Warn().Err(err).Object("duplicate", d).Msg("failed to close duplicate matrix")
+	}
+
+	err = d.region.Close()
+	if err != nil {
+		log.Warn().Err(err).Object("duplicate", d).Msg("failed to close duplicate region matrix")
+	}
+}
+
+func (d *Duplicate) Of(d2 *Duplicate) bool {
 	if d == nil || d2 == nil {
 		return false
 	}
 
-	if d.Empty() || d2.Empty() {
-		return false
-	}
-
-	if d.Team.Name != d2.Team.Name {
-		return false
-	}
-
 	if d.Value != d2.Value {
+		println(d.Value, d2.Value)
 		return false
 	}
 
@@ -47,22 +51,14 @@ func (d *Duplicate) Is(d2 *Duplicate) bool {
 		return false
 	}
 
-	m := d2.Region()
 	m2 := gocv.NewMat()
 
-	gocv.MatchTemplate(d.Mat, m, &m2, gocv.TmCcoeffNormed, gocv.NewMat())
+	gocv.MatchTemplate(d.Mat, d2.region, &m2, gocv.TmCcoeffNormed, gocv.NewMat())
 	_, maxc, _, _ := gocv.MinMaxLoc(m2)
 
 	return maxc > 0.90
 }
 
 func (d *Duplicate) MarshalZerologObject(e *zerolog.Event) {
-	e.Object("team", d.Team).Time("time", d.Time).Int("value", d.Value)
-}
-
-func (d *Duplicate) Region() gocv.Mat {
-	if d.Team.Name == team.Self.Name {
-		return d.Mat.Region(image.Rect(30, 20, 225, 60))
-	}
-	return d.Mat.Region(image.Rect(15, 30, 150, 60))
+	e.Time("time", d.Time).Int("value", d.Value)
 }

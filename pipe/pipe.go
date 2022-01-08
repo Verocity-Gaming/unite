@@ -27,29 +27,30 @@ type Pipe struct {
 }
 
 type Game struct {
-	Purple Score `json:"purple"`
-	Orange Score `json:"orange"`
-	Self   Score `json:"self"`
+	Purple  Score `json:"purple"`
+	Orange  Score `json:"orange"`
+	Self    Score `json:"self"`
+	Seconds int   `json:"seconds"`
 }
 
 type Score struct {
-	team.Team `json:"team"`
-	Value     int `json:"value"`
+	Team  string `json:"team"`
+	Value int    `json:"value"`
 }
 
 func New(addr string) *Pipe {
 	p := &Pipe{
 		game: Game{
 			Purple: Score{
-				team.Purple,
+				team.Purple.Name,
 				0,
 			},
 			Orange: Score{
-				team.Orange,
+				team.Orange.Name,
 				0,
 			},
 			Self: Score{
-				team.Self,
+				team.Self.Name,
 				0,
 			},
 		},
@@ -93,23 +94,23 @@ func (p *Pipe) Clear() {
 
 	p.game = Game{
 		Purple: Score{
-			team.Purple,
+			team.Purple.Name,
 			0,
 		},
 		Orange: Score{
-			team.Orange,
+			team.Orange.Name,
 			0,
 		},
 		Self: Score{
-			team.Self,
+			team.Self.Name,
 			0,
 		},
 	}
 }
 
-func (p *Pipe) Publish(t team.Team, value int) {
+func (p *Pipe) Publish(t *team.Team, value int) {
 	s := Score{
-		t,
+		t.Name,
 		value,
 	}
 
@@ -124,6 +125,10 @@ func (p *Pipe) Publish(t team.Team, value int) {
 		p.game.Purple.Value += s.Value
 		p.game.Self.Value += s.Value
 	}
+}
+
+func (p *Pipe) Time(minutes, seconds int) {
+	p.game.Seconds = minutes*60 + seconds
 }
 
 func (p *Pipe) score(ws *websocket.Conn) {
@@ -148,6 +153,6 @@ func (g Game) MarshalZerologObject(e *zerolog.Event) {
 	e.Object("purple", g.Purple).Object("orange", g.Orange)
 }
 
-func (u Score) MarshalZerologObject(e *zerolog.Event) {
-	e.Object("team", u.Team).Int("value", u.Value)
+func (s Score) MarshalZerologObject(e *zerolog.Event) {
+	e.Str("team", s.Team).Int("value", s.Value)
 }
